@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Multi-Tenant SaaS Billing - Architecture Hub</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+    <style>
+        body {
+            font-family: 'Plus Jakarta Sans', sans-serif;
+            background-color: #f8fafc;
+            color: #1e293b;
+        }
+        
+        .chart-container {
+            position: relative;
+            width: 100%;
+            height: 300px;
+        }
+
+        .custom-scrollbar::-webkit-scrollbar { width: 5px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: #f1f5f9; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
+
+        .fade-in { animation: fadeIn 0.3s ease-out; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+
+        .sidebar-item-active {
+            background-color: #2563eb;
+            color: white !important;
+            box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);
+        }
+
+        .pos-item-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+            gap: 12px;
+        }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col">
+
+    <!-- PERSPECTIVE SWITCHER -->
+    <div class="bg-slate-900 text-white px-4 py-2 text-[10px] flex justify-between items-center sticky top-0 z-[100]">
+        <div class="flex items-center gap-2">
+            <span class="opacity-60 font-bold">DEV VIEW:</span>
+            <div class="flex gap-1">
+                <button onclick="changeRole('super')" id="role-btn-super" class="px-2 py-0.5 rounded bg-slate-700 hover:bg-purple-600 transition uppercase font-black">Super Admin</button>
+                <button onclick="changeRole('merchant')" id="role-btn-merchant" class="px-2 py-0.5 rounded bg-slate-700 hover:bg-blue-600 transition uppercase font-black">Merchant</button>
+                <button onclick="changeRole('manager')" id="role-btn-manager" class="px-2 py-0.5 rounded bg-slate-700 hover:bg-indigo-600 transition uppercase font-black">Manager</button>
+                <button onclick="changeRole('staff')" id="role-btn-staff" class="px-2 py-0.5 rounded bg-slate-700 hover:bg-emerald-600 transition uppercase font-black">Staff</button>
+            </div>
+        </div>
+        <div id="role-indicator" class="font-bold text-blue-400 tracking-tighter uppercase text-[9px]">Current View: Super Admin</div>
+    </div>
+
+    <!-- MAIN APP WRAPPER -->
+    <div class="flex flex-grow h-[calc(100vh-32px)] overflow-hidden">
+        
+        <!-- SIDEBAR -->
+        <aside id="sidebar" class="w-64 bg-white border-r border-slate-200 flex flex-col hidden md:flex">
+            <div class="p-6 border-b border-slate-100 flex items-center gap-3">
+                <div class="w-8 h-8 bg-blue-600 rounded flex items-center justify-center text-white shadow-lg shadow-blue-100">
+                    <i class="fa-solid fa-bolt-lightning"></i>
+                </div>
+                <h1 class="font-bold text-lg tracking-tight">SaaS Billing</h1>
+            </div>
+            
+            <nav id="sidebar-nav" class="flex-grow p-4 space-y-1">
+                <!-- Nav items injected by JS -->
+            </nav>
+
+            <div class="p-4 border-t border-slate-100">
+                <div class="bg-slate-50 p-3 rounded-xl border border-slate-100">
+                    <p id="user-context-label" class="text-[9px] font-black text-slate-400 uppercase tracking-widest">Active Identity</p>
+                    <p id="user-context-name" class="text-xs font-bold text-slate-700 mt-1">Platform Owner</p>
+                </div>
+            </div>
+        </aside>
+
+        <!-- MAIN CONTENT -->
+        <main id="main-content" class="flex-grow overflow-y-auto custom-scrollbar bg-[#f8fafc] p-4 md:p-8">
+            <!-- Content Injected Dynamically -->
+        </main>
+    </div>
+
+    <!-- MODAL CONTAINER -->
+    <div id="modal-container" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[200] flex items-center justify-center p-4 hidden"></div>
+
+    <!-- SCRIPTS -->
+    <script>
+        // --- System State ---
+        let currentRole = 'super';
+        let currentModule = 'dashboard';
+        let cart = [];
+        let inventoryData = [
+            { id: 1, name: 'Coffee Beans (Arabic)', stock: 5, unit: 'kg', min: 10 },
+            { id: 2, name: 'Full Cream Milk', stock: 24, unit: 'L', min: 12 },
+            { id: 3, name: 'Sugar Sachets', stock: 450, unit: 'pcs', min: 100 },
+            { id: 4, name: 'Paper Cups (12oz)', stock: 80, unit: 'pcs', min: 200 }
+        ];
+
+        const navConfig = {
+            super: [
+                { id: 'dashboard', icon: 'fa-chart-pie', label: 'Platform Stats' },
+                { id: 'merchants', icon: 'fa-users', label: 'Merchants' },
+                { id: 'billing', icon: 'fa-credit-card', label: 'Billing & Plans' },
+                { id: 'ai', icon: 'fa-robot', label: 'AI Configuration' }
+            ],
+            merchant: [
+                { id: 'dashboard', icon: 'fa-house', label: 'Brand Dashboard' },
+                { id: 'shops', icon: 'fa-shop', label: 'Manage Shops' },
+                { id: 'catalog', icon: 'fa-box-open', label: 'Central Catalog' },
+                { id: 'staff', icon: 'fa-user-group', label: 'Staff Management' }
+            ],
+            manager: [
+                { id: 'dashboard', icon: 'fa-house-user', label: 'Shop Dashboard' },
+                { id: 'inventory', icon: 'fa-boxes-stacked', label: 'Inventory' },
+                { id: 'reports', icon: 'fa-file-lines', label: 'Daily Reports' }
+            ],
+            staff: [
+                { id: 'billing', icon: 'fa-cash-register', label: 'Billing Terminal' },
+                { id: 'history', icon: 'fa-clock-rotate-left', label: 'Shift History' }
+            ]
+        };
+
+        function changeRole(role) {
+            currentRole = role;
+            currentModule = navConfig[role][0].id;
+            renderSidebar();
+            navigateTo(currentModule);
+            
+            document.getElementById('role-indicator').textContent = `View: ${role.toUpperCase()} ADMIN`;
+            const contextName = {
+                super: 'Platform Master',
+                merchant: 'Urban Coffee Group (Owner)',
+                manager: 'Downtown Branch Manager',
+                staff: 'Main Counter Staff'
+            };
+            document.getElementById('user-context-name').textContent = contextName[role];
+        }
+
+        function renderSidebar() {
+            const nav = document.getElementById('sidebar-nav');
+            nav.innerHTML = '';
+            navConfig[currentRole].forEach(item => {
+                const isActive = item.id === currentModule;
+                const activeClass = isActive ? 'sidebar-item-active' : 'text-slate-600 hover:bg-slate-50';
+                nav.innerHTML += `
+                    <button onclick="navigateTo('${item.id}')" class="w-full flex items-center gap-3 p-3 rounded-xl transition font-semibold text-sm ${activeClass}">
+                        <i class="fa-solid ${item.icon} w-5"></i> ${item.label}
+                    </button>
+                `;
+            });
+        }
+
+        function navigateTo(moduleId) {
+            currentModule = moduleId;
+            renderSidebar();
+            const container = document.getElementById('main-content');
+            container.innerHTML = `<div class="fade-in">${getModuleHTML(moduleId)}</div>`;
+            
+            if (moduleId === 'dashboard') {
+                setTimeout(() => {
+                    if (currentRole === 'super') renderSuperCharts();
+                    if (currentRole === 'merchant') renderMerchantCharts();
+                    if (currentRole === 'manager') renderManagerCharts();
+                }, 50);
+            }
+        }
+
+        function getModuleHTML(id) {
+            const moduleKey = `${currentRole}_${id}`;
+            switch(moduleKey) {
+                // SUPER ADMIN MODULES
+                case 'super_dashboard':
+                    return `
+                        <div class="space-y-6">
+                            <h2 class="text-3xl font-black text-slate-900 tracking-tight">Platform Analytics</h2>
+                            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                <div class="bg-white p-6 rounded-2xl border border-slate-200"><p class="text-xs font-bold text-slate-400 uppercase">ARR</p><p class="text-2xl font-black text-slate-900">$2.4M</p></div>
+                                <div class="bg-white p-6 rounded-2xl border border-slate-200"><p class="text-xs font-bold text-slate-400 uppercase">Avg LTV</p><p class="text-2xl font-black text-slate-900">$4,200</p></div>
+                                <div class="bg-white p-6 rounded-2xl border border-slate-200"><p class="text-xs font-bold text-slate-400 uppercase">Merchants</p><p class="text-2xl font-black text-slate-900">1,204</p></div>
+                            </div>
+                            <div class="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+                                <h3 class="font-bold mb-4">Subscription Growth</h3>
+                                <div class="chart-container"><canvas id="chart-super-growth"></canvas></div>
+                            </div>
+                        </div>`;
+                case 'super_merchants':
+                    return `
+                        <div class="space-y-6">
+                            <div class="flex justify-between items-end">
+                                <div><h2 class="text-3xl font-black text-slate-900 tracking-tight">Merchants</h2><p class="text-slate-500">Manage all registered businesses.</p></div>
+                                <button class="bg-blue-600 text-white px-5 py-2.5 rounded-xl font-bold shadow-lg shadow-blue-100">+ New Merchant</button>
+                            </div>
+                            <div class="bg-white rounded-2xl border border-slate-200 overflow-hidden">
+                                <table class="w-full text-left">
+                                    <thead class="bg-slate-50 border-b border-slate-100"><tr class="text-[10px] font-black text-slate-400 uppercase"><th class="px-6 py-4">Brand Name</th><th class="px-6 py-4">Owner</th><th class="px-6 py-4">Plan</th><th class="px-6 py-4">Revenue Contribution</th><th class="px-6 py-4">Actions</th></tr></thead>
+                                    <tbody class="divide-y divide-slate-100">
+                                        <tr><td class="px-6 py-4 font-bold">Urban Coffee</td><td class="px-6 py-4 text-sm">alex@urban.com</td><td class="px-6 py-4"><span class="px-2 py-1 bg-purple-100 text-purple-700 text-[10px] font-bold rounded">ENTERPRISE</span></td><td class="px-6 py-4 text-sm font-bold">$12.4k</td><td class="px-6 py-4"><button class="text-blue-600 text-sm font-bold">View Details</button></td></tr>
+                                        <tr><td class="px-6 py-4 font-bold">Pizza Peak</td><td class="px-6 py-4 text-sm">sarah@peak.io</td><td class="px-6 py-4"><span class="px-2 py-1 bg-blue-100 text-blue-700 text-[10px] font-bold rounded">PRO</span></td><td class="px-6 py-4 text-sm font-bold">$4.2k</td><td class="px-6 py-4"><button class="text-blue-600 text-sm font-bold">View Details</button></td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>`;
+                case 'super_billing':
+                    return `
+                        <div class="space-y-6">
+                            <h2 class="text-3xl font-black text-slate-900 tracking-tight">Billing & Plans</h2>
+                            <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                                ${['Basic', 'Pro', 'Enterprise'].map(plan => `
+                                    <div class="bg-white p-8 rounded-3xl border border-slate-200 text-center shadow-sm">
+                                        <h4 class="font-bold text-slate-500 uppercase text-xs tracking-widest mb-4">${plan}</h4>
+                                        <div class="text-4xl font-black mb-6">$${plan === 'Basic' ? '29' : plan === 'Pro' ? '99' : '499'}<span class="text-sm font-normal text-slate-400">/mo</span></div>
+                                        <div class="space-y-4 mb-8 text-sm text-slate-600">
+                                            <p><i class="fa-solid fa-check text-green-500 mr-2"></i> ${plan === 'Basic' ? '2' : 'Unlimited'} Shops</p>
+                                            <p><i class="fa-solid fa-check text-green-500 mr-2"></i> Inventory Sync</p>
+                                            <p><i class="fa-solid fa-check text-green-500 mr-2"></i> AI Insights</p>
+                                        </div>
+                                        <button class="w-full py-3 bg-slate-900 text-white rounded-xl font-bold">Edit Tier</button>
+                                    </div>
+                                `).join('')}
+                            </div>
+                        </div>`;
+                case 'super_ai':
+                    return `
+                        <div class="space-y-6">
+                            <h2 class="text-3xl font-black text-slate-900 tracking-tight">AI Infrastructure</h2>
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                <div class="bg-white p-6 rounded-2xl border border-slate-200">
+                                    <h3 class="font-bold mb-4">Model Routing</h3>
+                                    <div class="space-y-4">
+                                        <div class="p-4 bg-slate-50 border border-slate-200 rounded-xl flex justify-between items-center">
+                                            <div><p class="font-bold">Text Generation</p><p class="text-xs text-slate-500">Gemini 2.5 Flash</p></div>
+                                            <button class="text-blue-600 text-xs font-bold">CHANGE</button>
+                                        </div>
+                                        <div class="p-4 bg-slate-50 border border-slate-200 rounded-xl flex justify-between items-center">
+                                            <div><p class="font-bold">Image Processing</p><p class="text-xs text-slate-500">Imagen 4.0</p></div>
+                                            <button class="text-blue-600 text-xs font-bold">CHANGE</button>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="bg-white p-6 rounded-2xl border border-slate-200">
+                                    <h3 class="font-bold mb-4">API Token Usage</h3>
+                                    <div class="h-4 w-full bg-slate-100 rounded-full mb-2 overflow-hidden"><div class="h-full bg-blue-600 w-3/4"></div></div>
+                                    <p class="text-xs text-slate-500">745,000 / 1,000,000 tokens used this month.</p>
+                                </div>
+                            </div>
+                        </div>`;
+
+                // MERCHANT MODULES
+                case 'merchant_dashboard':
+                    return `<div class="space-y-6"><h2 class="text-3xl font-black text-slate-900">Brand Portfolio</h2><div class="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm"><h3 class="font-bold mb-4">Shop Performance</h3><div class="chart-container"><canvas id="chart-merchant-shops"></canvas></div></div></div>`;
+                case 'merchant_shops':
+                    return `
+                        <div class="space-y-6">
+                            <div class="flex justify-between items-end">
+                                <div><h2 class="text-3xl font-black text-slate-900">Outlets</h2><p class="text-slate-500">Manage physical locations.</p></div>
+                                <button class="bg-indigo-600 text-white px-5 py-2.5 rounded-xl font-bold">+ New Shop</button>
+                            </div>
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div class="bg-white p-6 rounded-2xl border-l-4 border-indigo-500 shadow-sm">
+                                    <h4 class="font-bold">Downtown Branch</h4>
+                                    <p class="text-xs text-slate-400">Main Square, NY</p>
+                                    <div class="mt-4 flex gap-4 text-xs font-bold"><span class="text-emerald-600">Sales: $14k</span><span class="text-slate-500">Staff: 5</span></div>
+                                </div>
+                                <div class="bg-white p-6 rounded-2xl border-l-4 border-slate-300 shadow-sm">
+                                    <h4 class="font-bold">Airport Outlet</h4>
+                                    <p class="text-xs text-slate-400">Terminal 3</p>
+                                    <div class="mt-4 flex gap-4 text-xs font-bold"><span class="text-emerald-600">Sales: $9k</span><span class="text-slate-500">Staff: 3</span></div>
+                                </div>
+                            </div>
+                        </div>`;
+                case 'merchant_staff':
+                    return `
+                        <div class="space-y-6">
+                            <h2 class="text-3xl font-black text-slate-900">Staff Management</h2>
+                            <div class="bg-white rounded-2xl border border-slate-200 p-6">
+                                <div class="flex items-center justify-between mb-6"><h3 class="font-bold">Permission Roles</h3><button class="text-indigo-600 font-bold text-sm">+ Custom Role</button></div>
+                                <div class="space-y-3">
+                                    <div class="flex justify-between p-3 bg-slate-50 rounded-lg"><span>Cashier</span><span class="text-[10px] bg-slate-200 px-2 py-1 rounded">Limited Access</span></div>
+                                    <div class="flex justify-between p-3 bg-slate-50 rounded-lg"><span>Manager</span><span class="text-[10px] bg-indigo-100 text-indigo-700 px-2 py-1 rounded">Full Shop Access</span></div>
+                                </div>
+                            </div>
+                        </div>`;
+
+                // MANAGER MODULES
+                case 'manager_dashboard':
+                    return `<div class="space-y-6"><h2 class="text-3xl font-black text-slate-900">Shop Dashboard</h2><div class="grid grid-cols-1 md:grid-cols-2 gap-4"><div class="bg-white p-6 rounded-2xl border border-slate-200"><p class="text-xs font-bold text-slate-400 uppercase">Today's Sales</p><p class="text-2xl font-black text-slate-900">$1,450.00</p></div><div class="bg-white p-6 rounded-2xl border border-slate-200"><p class="text-xs font-bold text-slate-400 uppercase">Average Ticket</p><p class="text-2xl font-black text-slate-900">$12.40</p></div></div><div class="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm"><h3 class="font-bold mb-4">Hourly Traffic</h3><div class="chart-container"><canvas id="chart-manager-hourly"></canvas></div></div></div>`;
+                case 'manager_inventory':
+                    return `
+                        <div class="space-y-6">
+                            <h2 class="text-3xl font-black text-slate-900">Inventory Control</h2>
+                            <div class="bg-white rounded-2xl border border-slate-200 overflow-hidden">
+                                <table class="w-full text-left">
+                                    <thead class="bg-slate-50 border-b border-slate-100"><tr class="text-[10px] font-black text-slate-400 uppercase"><th class="px-6 py-4">Item</th><th class="px-6 py-4">Stock</th><th class="px-6 py-4">Status</th><th class="px-6 py-4">Actions</th></tr></thead>
+                                    <tbody class="divide-y divide-slate-50">
+                                        ${inventoryData.map(item => `
+                                            <tr class="text-sm"><td class="px-6 py-4 font-bold">${item.name}</td><td class="px-6 py-4">${item.stock} ${item.unit}</td><td class="px-6 py-4"><span class="px-2 py-1 rounded-full font-bold text-[10px] ${item.stock <= item.min ? 'bg-red-100 text-red-600' : 'bg-emerald-100 text-emerald-600'}">${item.stock <= item.min ? 'LOW' : 'OK'}</span></td><td class="px-6 py-4"><button class="text-indigo-600 font-bold">Update</button></td></tr>
+                                        `).join('')}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>`;
+
+                // STAFF MODULES
+                case 'staff_billing':
+                    return `
+                        <div class="flex flex-col lg:flex-row gap-6 h-full min-h-[600px]">
+                            <div class="flex-grow space-y-4">
+                                <div class="bg-white p-4 rounded-2xl border border-slate-200 flex gap-2"><input type="text" placeholder="Search product..." class="flex-grow bg-slate-50 border-none rounded-xl px-4 py-2 outline-none"><button class="bg-slate-100 p-2 rounded-xl"><i class="fa-solid fa-barcode"></i></button></div>
+                                <div class="pos-item-grid">
+                                    ${[{name:'Espresso',price:4.5,icon:'fa-mug-hot'},{name:'Latte',price:6.0,icon:'fa-mug-saucer'}].map(item => `
+                                        <button onclick="addToCart('${item.name}', ${item.price})" class="bg-white border border-slate-200 p-4 rounded-2xl hover:border-blue-500 hover:shadow-lg transition text-left group">
+                                            <i class="fa-solid ${item.icon} text-slate-300 group-hover:text-blue-500 mb-4 block"></i><p class="font-bold text-sm text-slate-700">${item.name}</p><p class="text-blue-600 font-black">$${item.price.toFixed(2)}</p>
+                                        </button>
+                                    `).join('')}
+                                </div>
+                            </div>
+                            <div class="w-full lg:w-80 bg-slate-900 rounded-3xl flex flex-col overflow-hidden text-white shadow-2xl">
+                                <div class="p-6 bg-slate-800 flex justify-between items-center"><h3 class="font-black tracking-tight">CART</h3><button onclick="clearCart()" class="text-red-400 text-xs font-bold">CLEAR</button></div>
+                                <div id="pos-cart-list" class="flex-grow p-4 space-y-3 overflow-y-auto custom-scrollbar"><p class="text-slate-500 text-center text-sm py-10">Empty...</p></div>
+                                <div class="p-6 bg-slate-800 border-t border-slate-700 space-y-4">
+                                    <div class="flex justify-between text-xl font-black"><span>Total</span><span id="pos-total-val">$0.00</span></div>
+                                    <button onclick="processPayment()" class="w-full bg-emerald-600 hover:bg-emerald-500 p-4 rounded-2xl font-black text-lg transition">PAY NOW</button>
+                                </div>
+                            </div>
+                        </div>`;
+                case 'staff_history':
+                    return `<div class="space-y-6"><h2 class="text-3xl font-black text-slate-900">Shift History</h2><div class="bg-white rounded-2xl border border-slate-200 overflow-hidden"><div class="p-4 bg-slate-50 border-b border-slate-100 flex justify-between text-[10px] font-black uppercase text-slate-400"><span>TX #</span><span>Time</span><span>Total</span></div><div class="p-4 flex justify-between text-sm font-bold"><span>TX-9041</span><span class="text-slate-400">10:42 AM</span><span>$14.50</span></div></div></div>`;
+                
+                default:
+                    return `<div class="p-20 text-center text-slate-400">Section not found.</div>`;
+            }
+        }
+
+        // --- Core Functions ---
+        function addToCart(name, price) {
+            const existing = cart.find(i => i.name === name);
+            if (existing) existing.qty++;
+            else cart.push({ name, price, qty: 1 });
+            renderCart();
+        }
+
+        function clearCart() {
+            cart = [];
+            renderCart();
+        }
+
+        function renderCart() {
+            const list = document.getElementById('pos-cart-list');
+            const totalEl = document.getElementById('pos-total-val');
+            if (!list) return;
+            if (cart.length === 0) { list.innerHTML = `<p class="text-slate-500 text-center text-sm py-10">Empty...</p>`; totalEl.textContent = '$0.00'; return; }
+            let total = 0;
+            list.innerHTML = cart.map(item => { total += item.price * item.qty; return `<div class="bg-slate-800 p-3 rounded-xl border border-slate-700 flex justify-between"><div><p class="font-bold text-sm">${item.name}</p><p class="text-[10px] opacity-40">${item.qty} x $${item.price.toFixed(2)}</p></div><p class="font-black text-blue-400">$${(item.price * item.qty).toFixed(2)}</p></div>`; }).join('');
+            totalEl.textContent = `$${total.toFixed(2)}`;
+        }
+
+        function processPayment() {
+            if (cart.length === 0) return;
+            const btn = event.target;
+            btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> PROCESSING...';
+            setTimeout(() => { alert("Transaction Complete"); clearCart(); btn.innerHTML = 'PAY NOW'; }, 1000);
+        }
+
+        function renderSuperCharts() {
+            const ctx = document.getElementById('chart-super-growth');
+            if (!ctx) return;
+            new Chart(ctx.getContext('2d'), { type: 'line', data: { labels: ['Jan', 'Feb', 'Mar', 'Apr'], datasets: [{ label: 'Growth', data: [400, 600, 550, 800], borderColor: '#2563eb', tension: 0.4 }] }, options: { responsive: true, maintainAspectRatio: false } });
+        }
+
+        function renderMerchantCharts() {
+            const ctx = document.getElementById('chart-merchant-shops');
+            if (!ctx) return;
+            new Chart(ctx.getContext('2d'), { type: 'bar', data: { labels: ['Shop A', 'Shop B'], datasets: [{ label: 'Sales', data: [15000, 12000], backgroundColor: '#4f46e5' }] }, options: { responsive: true, maintainAspectRatio: false } });
+        }
+
+        function renderManagerCharts() {
+            const ctx = document.getElementById('chart-manager-hourly');
+            if (!ctx) return;
+            new Chart(ctx.getContext('2d'), { type: 'line', data: { labels: ['8am', '12pm', '4pm'], datasets: [{ label: 'Traffic', data: [15, 80, 60], borderColor: '#6366f1', tension: 0.4 }] }, options: { responsive: true, maintainAspectRatio: false } });
+        }
+
+        window.onload = () => changeRole('super');
+    </script>
+</body>
+</html>
